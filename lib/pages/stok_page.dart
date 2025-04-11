@@ -15,6 +15,7 @@ class _StockMaterialPageState extends State<StockMaterialPage> {
 
   List<dynamic> materials = [];
   List<dynamic> filtered = [];
+  bool loading = false;
 
   final TextEditingController searchController = TextEditingController();
 
@@ -25,20 +26,24 @@ class _StockMaterialPageState extends State<StockMaterialPage> {
   }
 
   Future<void> fetchMaterials() async {
-    try {
-      final List<dynamic> response = await supabase
-          .from('material')
-          .select('*, material_details(*)')
-          .order('DESKRIPSI MATERIAL', ascending: true);
+  setState(() => loading = true);
+  try {
+    // Gunakan join untuk mengambil data yang terhubung
+    final List<dynamic> response = await supabase
+        .from('material')
+        .select('id, "DESKRIPSI MATERIAL", material_details(id, stock, image_url)')
+        .order('DESKRIPSI MATERIAL', ascending: true);
 
-      setState(() {
-        materials = response;
-        filtered = response;
-      });
-    } catch (e) {
-      print('Error fetching materials: $e');
-    }
+    setState(() {
+      materials = response;
+      filtered = response;
+      loading = false;
+    });
+  } catch (e) {
+    setState(() => loading = false);
+    // Handle error
   }
+}
 
   void searchMaterial(String query) {
     final results = materials.where((item) {
@@ -72,43 +77,76 @@ class _StockMaterialPageState extends State<StockMaterialPage> {
             ),
           ),
           Expanded(
-            child: ListView.builder(
-              itemCount: filtered.length,
-              itemBuilder: (context, index) {
-                final item = filtered[index];
-                final detailList = item['material_details'];
-                final detail = (detailList is List && detailList.isNotEmpty) ? detailList[0] : null;
+  child: GridView.builder(
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+    itemCount: filtered.length,
+    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+      crossAxisCount: 2,
+      mainAxisSpacing: 12,
+      crossAxisSpacing: 12,
+      childAspectRatio: 3 / 4,
+    ),
+    itemBuilder: (context, index) {
+      final item = filtered[index];
+      final detailList = item['material_details'];
+      final detail = (detailList is List && detailList.isNotEmpty) ? detailList[0] : null;
 
-                final imageUrl = detail != null ? detail['image_url'] : null;
-                final stock = detail != null ? detail['stock'] ?? 0 : 0;
+      final imageUrl = detail != null ? detail['image_url'] : null;
+      final stock = detail != null ? detail['stock'] ?? 0 : 0;
 
-                return Card(
-                  margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  child: ListTile(
-                    leading: imageUrl != null
-                        ? ClipRRect(
-                            borderRadius: BorderRadius.circular(8),
-                            child: Image.network(imageUrl, width: 50, height: 50, fit: BoxFit.cover),
-                          )
-                        : const Icon(Icons.image, size: 40),
-                    title: Text(item['DESKRIPSI MATERIAL'] ?? 'Tanpa Nama'),
-                    subtitle: Text('Stok: $stock'),
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => MaterialDetailPage(
-                            materialId: int.tryParse(item['id'].toString()) ?? 0,
-                            materialName: item['DESKRIPSI MATERIAL'] ?? 'Tanpa Nama',
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-                );
-              },
+      return GestureDetector(
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => MaterialDetailPage(
+                materialId: item['id'].toString(),
+                materialName: item['DESKRIPSI MATERIAL'] ?? 'Tanpa Nama',
+              ),
             ),
+          );
+        },
+        child: Card(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          elevation: 4,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: ClipRRect(
+                  borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+                  child: imageUrl != null
+                      ? Image.network(
+                          imageUrl,
+                          fit: BoxFit.cover,
+                        )
+                      : Container(
+                          color: Colors.grey[300],
+                          child: const Icon(Icons.image, size: 48, color: Colors.grey),
+                        ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.all(8.0),
+                child: Text(
+                  item['DESKRIPSI MATERIAL'] ?? 'Tanpa Nama',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4),
+                child: Text('Stok: $stock'),
+              ),
+            ],
           ),
+        ),
+      );
+    },
+  ),
+),
+
         ],
       ),
     );
@@ -116,10 +154,14 @@ class _StockMaterialPageState extends State<StockMaterialPage> {
 }
 
 class MaterialDetailPage extends StatefulWidget {
-  final int materialId;
+  final String materialId;
   final String materialName;
 
-  const MaterialDetailPage({Key? key, required this.materialId, required this.materialName}) : super(key: key);
+  const MaterialDetailPage({
+    Key? key,
+    required this.materialId,
+    required this.materialName,
+  }) : super(key: key);
 
   @override
   State<MaterialDetailPage> createState() => _MaterialDetailPageState();
@@ -128,10 +170,10 @@ class MaterialDetailPage extends StatefulWidget {
 class _MaterialDetailPageState extends State<MaterialDetailPage> {
   final SupabaseClient supabase = Supabase.instance.client;
   final TextEditingController stokController = TextEditingController();
-
   bool loading = false;
   String? imageUrl;
   File? imageFile;
+  Map<String, dynamic>? materialInfo;
 
   @override
   void initState() {
@@ -140,59 +182,72 @@ class _MaterialDetailPageState extends State<MaterialDetailPage> {
   }
 
   Future<void> fetchMaterialDetail() async {
-    final response = await supabase
-        .from('material')
-        .select('*, material_details(*)')
-        .eq('id', widget.materialId)
-        .single();
+    setState(() => loading = true);
+    try {
+      final response = await supabase
+          .from('material_details')
+          .select('*, material:material(*)')
+          .eq('material_id', widget.materialId)
+          .single();
 
-    if (response != null) {
-      final detailList = response['material_details'];
-      final detail = (detailList is List && detailList.isNotEmpty) ? detailList[0] : null;
-      setState(() {
-        stokController.text = detail?['stock']?.toString() ?? '0';
-        imageUrl = detail?['image_url'];
-      });
+      if (response != null) {
+        setState(() {
+          stokController.text = response['stock']?.toString() ?? '0';
+          imageUrl = response['image_url'];
+          materialInfo = response['material'];
+        });
+      }
+    } catch (e) {
+      print('Error fetching material detail: $e');
+    } finally {
+      setState(() => loading = false);
     }
   }
 
   Future<void> saveChanges() async {
     setState(() => loading = true);
+    try {
+      String? uploadedUrl = imageUrl;
 
-    String? uploadedUrl = imageUrl;
-    if (imageFile != null) {
+      if (imageFile != null) {
+      // Hapus foto lama jika ada
+      if (imageUrl != null) {
+        await deleteOldImageFromStorage(imageUrl!);
+      }
+      // Upload foto baru
       uploadedUrl = await uploadImage(imageFile!);
     }
 
-    final existingDetail = await supabase
-        .from('material_details')
-        .select()
-        .eq('material_id', widget.materialId)
-        .maybeSingle();
+      await supabase
+          .from('material_details')
+          .update({
+            'stock': int.tryParse(stokController.text) ?? 0,
+            'image_url': uploadedUrl,
+            'updated_at': DateTime.now().toIso8601String()
+          })
+          .eq('material_id', widget.materialId);
 
-    final data = {
-      'stock': int.tryParse(stokController.text) ?? 0,
-      'image_url': uploadedUrl,
-      'material_id': widget.materialId
-    };
-
-    if (existingDetail == null) {
-      await supabase.from('material_details').insert(data);
-    } else {
-      await supabase.from('material_details').update(data).eq('material_id', widget.materialId);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Data berhasil disimpan')),
+        );
+        await fetchMaterialDetail(); 
+      }
+    } catch (e) {
+      print("Error saat menyimpan: $e");
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: ${e.toString()}')),
+        );
+      }
+    } finally {
+      setState(() => loading = false);
     }
-
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Data berhasil disimpan')));
-      Navigator.pop(context);
-    }
-
-    setState(() => loading = false);
   }
 
-  Future<void> pickImage() async {
+  Future<void> pickImage({required ImageSource source}) async {
     final picker = ImagePicker();
-    final pickedFile = await picker.pickImage(source: ImageSource.gallery);
+    final pickedFile = await picker.pickImage(source: source);
 
     if (pickedFile != null) {
       setState(() {
@@ -201,14 +256,98 @@ class _MaterialDetailPageState extends State<MaterialDetailPage> {
     }
   }
 
+  Future<void> removeImage() async {
+    setState(() {
+      imageFile = null;
+      imageUrl = null;
+    });
+  }
+
   Future<String> uploadImage(File file) async {
-    final fileName = '${DateTime.now().millisecondsSinceEpoch}.jpg';
-    final path = 'material/$fileName';
+    try {
+      final fileName = '${DateTime.now().millisecondsSinceEpoch}.jpg';
+      final path = 'material/$fileName';
 
-    await supabase.storage.from('foto_material').upload(path, file);
-    final publicUrl = supabase.storage.from('foto_material').getPublicUrl(path);
+      await supabase.storage.from('material-images').upload(path, file);
+      final publicUrl =
+          supabase.storage.from('material-images').getPublicUrl(path);
 
-    return publicUrl;
+      return publicUrl;
+    } catch (e) {
+      print("Error upload gambar: $e");
+      rethrow;
+    }
+  }
+
+  Future<void> deleteOldImageFromStorage(String url) async {
+  try {
+    final Uri uri = Uri.parse(url);
+    final String fullPath = uri.pathSegments.skip(1).join('/'); // skip bucket name
+    await supabase.storage.from('material-images').remove([fullPath]);
+  } catch (e) {
+    print('Gagal menghapus file lama: $e');
+  }
+}
+
+  Widget buildImageSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        AspectRatio(
+          aspectRatio: 4 / 3,
+          child: Container(
+            decoration: BoxDecoration(
+              border: Border.all(color: Colors.grey),
+            ),
+            child: imageFile != null
+                ? Image.file(imageFile!, fit: BoxFit.cover)
+                : (imageUrl != null
+                    ? Image.network(imageUrl!, fit: BoxFit.cover)
+                    : const Center(child: Text('Belum ada foto'))),
+          ),
+        ),
+        const SizedBox(height: 7),
+        Row(
+          children: [
+            ElevatedButton.icon(
+              icon: const Icon(Icons.photo),
+              label: const Text('Galeri'),
+              onPressed: () => pickImage(source: ImageSource.gallery),
+            ),
+            const SizedBox(width: 7),
+            ElevatedButton.icon(
+              icon: const Icon(Icons.camera_alt),
+              label: const Text('Kamera'),
+              onPressed: () => pickImage(source: ImageSource.camera),
+            ),
+            const SizedBox(width: 7),
+            if (imageUrl != null || imageFile != null)
+              ElevatedButton.icon(
+                icon: const Icon(Icons.delete, color: Colors.white),
+                label: const Text('Hapus'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.red,
+                ),
+                onPressed: removeImage,
+              ),
+          ],
+        )
+      ],
+    );
+  }
+
+  Widget buildMaterialInfo() {
+    if (materialInfo == null) return const SizedBox.shrink();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Nama: ${materialInfo!['DESKRIPSI MATERIAL']}', style: const TextStyle(fontSize: 14)),
+        Text('Katalog: ${materialInfo!['KATALOG'] ?? '-'}'),
+        Text('Satuan: ${materialInfo!['SATUAN'] ?? '-'}'),
+        const Divider(),
+      ],
+    );
   }
 
   @override
@@ -217,27 +356,16 @@ class _MaterialDetailPageState extends State<MaterialDetailPage> {
       appBar: AppBar(title: Text(widget.materialName)),
       body: loading
           ? const Center(child: CircularProgressIndicator())
-          : Padding(
+          : SingleChildScrollView(
               padding: const EdgeInsets.all(16),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  GestureDetector(
-                    onTap: pickImage,
-                    child: Container(
-                      height: 180,
-                      width: double.infinity,
-                      decoration: BoxDecoration(
-                        border: Border.all(color: Colors.grey),
-                      ),
-                      child: imageFile != null
-                          ? Image.file(imageFile!, fit: BoxFit.cover)
-                          : (imageUrl != null
-                              ? Image.network(imageUrl!, fit: BoxFit.cover)
-                              : const Center(child: Text('Tap untuk unggah foto'))),
-                    ),
-                  ),
+                  buildImageSection(),
                   const SizedBox(height: 20),
+                  const Text('Detail Material', style: TextStyle(fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 8),
+                  buildMaterialInfo(),
                   TextField(
                     controller: stokController,
                     keyboardType: TextInputType.number,
@@ -247,10 +375,30 @@ class _MaterialDetailPageState extends State<MaterialDetailPage> {
                     ),
                   ),
                   const SizedBox(height: 20),
-                  ElevatedButton(
-                    onPressed: saveChanges,
-                    child: const Text('Simpan Perubahan'),
-                  )
+                  SizedBox(
+                    width: double.infinity,
+                   child: ElevatedButton.icon(
+                    icon: loading
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const Icon(Icons.save),
+                    label: loading
+                        ? const Text('Menyimpan...')
+                        : const Text('Simpan Perubahan'),
+                    onPressed: loading
+                        ? null
+                        : () async {
+                            await saveChanges(); // Di sini sudah termasuk Navigator.pop()
+                            // fetchMaterialDetail() tidak perlu dipanggil di sini
+                          },
+                  ),
+                  ),
                 ],
               ),
             ),

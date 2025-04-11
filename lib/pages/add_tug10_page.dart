@@ -28,7 +28,6 @@ class _Tug10PageState extends State<Tug10Page> {
   TextEditingController noSimKtpSopirController = TextEditingController();
   TextEditingController namaKendaraanController = TextEditingController();
   TextEditingController searchController = TextEditingController();
-  // Tambahkan controller untuk tanggal
   TextEditingController tanggalPenggantianController = TextEditingController();
   TextEditingController tanggalTugController = TextEditingController();
 
